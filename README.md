@@ -7,7 +7,7 @@ A system that scores the health of 5G/LTE cell sites from KPI telemetry, detects
 The system is a six-stage pipeline. Stages 1-4 are deterministic and run once when the API starts; stage 5 calls OpenAI on demand; stage 6 is the user interface.
 
 1. **Data ingestion** loads 15-minute KPI telemetry for every site from CSV.
-2. **Health scoring** reduces each reading to a 0-100 score from seven weighted KPIs.
+2. **Health scoring** reduces each reading to a 0-100 score from eight weighted KPIs.
 3. **Anomaly detection** flags unusual readings per KPI (z-score) and per row (Isolation Forest).
 4. **Failure prediction** combines trend, level, threshold proximity, anomalies, and acceleration into a risk score, a failure type, and a time-to-failure estimate.
 5. **AI explanation** turns the computed findings into business-friendly explanations, executive summaries, and answers.
@@ -25,7 +25,7 @@ The system is a six-stage pipeline. Stages 1-4 are deterministic and run once wh
    │  1 Ingestion      2 Health scoring     3 Anomaly detection   4 Prediction       │
    │  data_generator ─► health_scorer ─┬──► anomaly_detector ───► predictor          │
    │                    score 0-100    │    z-score (per KPI)     risk 0-1           │
-   │                    7 sub-scores   │    IsolationForest       type, window,      │
+   │                    8 sub-scores   │    IsolationForest       type, window,      │
    │                                   │    (multivariate)        confidence         │
    │                                   └─────────────────────────────┘               │
    │                                      │  results held in app.state               │
@@ -42,7 +42,7 @@ The system is a six-stage pipeline. Stages 1-4 are deterministic and run once wh
 ### Key design decisions
 
 - **Weighted multi-KPI scoring, not a single threshold.** Faults rarely show up in one KPI. A site with CPU at 70%, latency at 45 ms, and 1.8% packet loss breaks no single threshold but is clearly in trouble. A weighted score captures combined degradation, degrades smoothly instead of flipping at a cliff, and keeps per-KPI sub-scores so the cause of a low score can be explained.
-- **Dual anomaly detection (statistical + Isolation Forest).** The z-score method is interpretable: it names the KPI, the value, and the expected range, which is what an engineer needs. It looks at one KPI at a time, though. The Isolation Forest sees all eight KPIs together and catches joint shifts that stay under every individual threshold, but it cannot say which KPI is responsible. Each covers the other's blind spot.
+- **Dual anomaly detection (statistical + Isolation Forest).** The z-score method is interpretable: it names the KPI, the value, and the expected range, which is what an engineer needs. It looks at one KPI at a time, though. The Isolation Forest sees all nine KPIs together and catches joint shifts that stay under every individual threshold, but it cannot say which KPI is responsible. Each covers the other's blind spot.
 - **Transparent risk model, not black-box ML.** There is no labeled outage history to train on, and operations teams must be able to audit why a site was flagged. A weighted sum of five readable signals can be inspected, argued about, and tuned, and every prediction lists the signals behind it.
 - **Trend extrapolation for failure windows.** The question an on-call engineer asks is "how long do I have?". Extrapolating the health score's recent slope to the Critical band answers it with a number that is simple to explain and cheap to compute. Its limits are stated explicitly below.
 
@@ -83,7 +83,8 @@ This produces `data/network_telemetry.csv` and `data/site_scenarios.json`:
 
 - **50 sites** (30 on 5G, 20 on LTE) across 15 US cities, with IDs such as `DALLAS_5G_RAN_1000`.
 - **24 hours at 15-minute intervals**, which is 96 readings per site, and **50 × 96 = 4,800 rows**.
-- **12 columns**: `site_id`, `timestamp`, `network_type`, `cpu_utilization`, `memory_utilization`, `latency_ms`, `packet_loss_pct`, `throughput_mbps`, `connected_users`, `signal_quality_sinr`, `alarm_count`, `site_status`.
+- **13 columns**: `site_id`, `timestamp`, `network_type`, `cpu_utilization`, `memory_utilization`, `latency_ms`, `packet_loss_pct`, `throughput_mbps`, `connected_users`, `signal_quality_sinr`, `handover_failure_rate`, `alarm_count`, `site_status`.
+- **`handover_failure_rate`** is the percentage of failed handovers between cells. Healthy baselines are 1-4% on 5G and 0.5-3% on LTE; it rises with the scenario stress and moves together with user count and SINR.
 - **Planted scenarios**, one per site, recorded in `site_scenarios.json` for evaluation:
 
 | Scenario | Sites | Behavior |
@@ -111,7 +112,7 @@ Terminal 2 — Dashboard:
 streamlit run dashboard.py
 ```
 
-The API is at http://localhost:8000 (interactive docs at `/docs`) and the dashboard at http://localhost:8501. On startup the API logs `Loaded 50 sites, 696 anomalies detected, 22 sites at risk`.
+The API is at http://localhost:8000 (interactive docs at `/docs`) and the dashboard at http://localhost:8501. On startup the API logs `Loaded 50 sites, 801 anomalies detected, 22 sites at risk`.
 
 ## API Reference
 
@@ -141,7 +142,7 @@ All sites with latest health, lowest score first. Query: `status` = `Healthy` | 
   {
     "site_id": "MINNEAPOLIS_LTE_RAN_1731",
     "network_type": "LTE",
-    "timestamp": "2026-10-10T17:45:00",
+    "timestamp": "2026-10-10T19:00:00",
     "health_score": 0,
     "health_status": "Critical",
     "site_status": "Failed",
@@ -160,7 +161,7 @@ Detailed view of one site: latest metrics, component sub-scores, Isolation Fores
 {
   "site_id": "MINNEAPOLIS_LTE_RAN_1731",
   "network_type": "LTE",
-  "timestamp": "2026-10-10T17:45:00",
+  "timestamp": "2026-10-10T19:00:00",
   "health_score": 0,
   "health_status": "Critical",
   "site_status": "Failed",
@@ -172,18 +173,20 @@ Detailed view of one site: latest metrics, component sub-scores, Isolation Fores
     "throughput_mbps": 5.65,
     "connected_users": 166.0,
     "signal_quality_sinr": -6.77,
+    "handover_failure_rate": 21.5,
     "alarm_count": 9.0
   },
   "component_scores": {
     "latency_score": 0.0, "packet_loss_score": 0.0, "cpu_score": 0.0,
-    "throughput_score": 0.0, "memory_score": 0.0, "sinr_score": 0.0, "alarm_score": 0.0
+    "throughput_score": 0.0, "handover_score": 0.0, "memory_score": 0.0,
+    "sinr_score": 0.0, "alarm_score": 0.0
   },
   "ml_anomaly": true,
   "ml_anomaly_score": 0.784,
   "anomalies": [
     {
       "site_id": "MINNEAPOLIS_LTE_RAN_1731",
-      "timestamp": "2026-10-10T15:45:00",
+      "timestamp": "2026-10-10T17:00:00",
       "metric_name": "cpu_utilization",
       "current_value": 52.75,
       "expected_range_low": 36.88,
@@ -207,16 +210,16 @@ Time series for charts. Query: `hours` (1-24, optional; relative to the site's l
   "hours": 1,
   "points": [
     {
-      "timestamp": "2026-10-10T17:00:00",
+      "timestamp": "2026-10-10T18:15:00",
       "health_score": 1,
       "health_status": "Critical",
       "site_status": "Failed",
       "is_anomaly": true,
-      "anomaly_score": 0.786,
+      "anomaly_score": 0.788,
       "metrics": {
         "cpu_utilization": 99.15, "memory_utilization": 95.18, "latency_ms": 254.04,
         "packet_loss_pct": 10.41, "throughput_mbps": 0.0, "connected_users": 166.0,
-        "signal_quality_sinr": -6.2, "alarm_count": 10.0
+        "signal_quality_sinr": -6.2, "handover_failure_rate": 21.29, "alarm_count": 10.0
       }
     }
   ]
@@ -232,9 +235,9 @@ Network-wide counts, average score, and the 10 lowest-scoring sites.
   "total_sites": 50,
   "healthy_count": 28,
   "warning_count": 1,
-  "degraded_count": 12,
-  "critical_count": 9,
-  "average_score": 70.7,
+  "degraded_count": 11,
+  "critical_count": 10,
+  "average_score": 70.1,
   "worst_sites": [
     {
       "site_id": "MINNEAPOLIS_LTE_RAN_1731",
@@ -249,13 +252,13 @@ Network-wide counts, average score, and the 10 lowest-scoring sites.
 
 ### `GET /api/anomalies`
 
-Statistical anomalies, critical first then newest first. Query: `site_id` (404 if unknown), `limit` (1-5000).
+Statistical anomalies, critical first then newest first. Query: `site_id` (404 if unknown), `limit` (1-5000). `metric_name` is one of the nine KPIs, including `handover_failure_rate`.
 
 ```json
 [
   {
     "site_id": "DENVER_5G_RAN_1085",
-    "timestamp": "2026-10-10T17:00:00",
+    "timestamp": "2026-10-10T18:15:00",
     "metric_name": "signal_quality_sinr",
     "current_value": 5.2,
     "expected_range_low": 6.8,
@@ -276,7 +279,7 @@ Predictions above the 0.3 risk threshold, highest risk first. Query: `min_risk` 
     "site_id": "HOUSTON_LTE_RAN_1527",
     "predicted_failure_type": "signal_degradation",
     "risk_score": 1.0,
-    "confidence": 0.956,
+    "confidence": 0.955,
     "estimated_failure_window_hours": 0.0,
     "supporting_kpis": [
       {
@@ -287,11 +290,13 @@ Predictions above the 0.3 risk threshold, highest risk first. Query: `min_risk` 
         "threshold": 100
       }
     ],
-    "explanation": "Likely signal degradation: Health score is 1 and falling 27.5 points/hour; 7 KPI(s) near critical (...); 37 anomalies in the last 2 hours; the decline is accelerating; already in the critical band.",
+    "explanation": "Likely signal degradation: Health score is 1 and falling 27.6 points/hour; 8 KPI(s) near critical (...); 43 anomalies in the last 2 hours; the decline is accelerating; already in the critical band.",
     "recommended_action": "URGENT: Inspect antennas, feeders, and interference sources; schedule a radio optimization."
   }
 ]
 ```
+
+`predicted_failure_type` is one of `congestion`, `capacity_exhaustion`, `signal_degradation`, `hardware_degradation`, or `mobility_degradation`.
 
 ### `GET /api/predictions/{site_id}`
 
@@ -312,15 +317,16 @@ Response:
 ```json
 {
   "site_id": "MINNEAPOLIS_LTE_RAN_1731",
-  "summary": "The Minneapolis LTE site is experiencing severe performance issues, with a health score of 0 and multiple critical KPIs indicating imminent failure. ...",
+  "summary": "The Minneapolis LTE site is experiencing severe performance issues, with a health score of 0 and multiple KPIs in critical condition. Immediate action is required to prevent further degradation and potential service outages.",
   "evidence": [
-    "Health score dropped from 99 to 0 in 4 hours.",
-    "CPU utilization increased from 43.2% to 98.3%.",
-    "Latency increased from 37.9 ms to 253.6 ms."
+    "Health score dropped from 100 to 0 in four hours.",
+    "CPU utilization increased to 98.3%, exceeding the 90% threshold.",
+    "Latency increased to 253.6 ms, far above the 100 ms threshold.",
+    "Handover failure rate increased to 21.5%, indicating potential connectivity issues."
   ],
   "recommended_actions": [
-    "Investigate and resolve high CPU and memory utilization immediately.",
-    "Check for any hardware failures or network congestion causing high latency and packet loss."
+    "Investigate and resolve high CPU and memory utilization to prevent system overload.",
+    "Address the root cause of increased latency and packet loss to improve network performance."
   ],
   "priority": "P1-Critical"
 }
@@ -337,7 +343,7 @@ Request / response:
 ```
 
 ```json
-{ "answer": "There are 9 critical sites." }
+{ "answer": "There are 10 critical sites." }
 ```
 
 ### `GET /api/network-summary`
@@ -346,7 +352,7 @@ One-paragraph executive briefing. Cached after the first successful call because
 
 ```json
 {
-  "summary": "The network's overall health score is 70.7, with 9 critical and 12 degraded sites out of 50 total. ..."
+  "summary": "The network's overall health is moderate, with an average score of 70.1 across 50 sites. However, there are significant risks, with 10 sites in critical condition and 22 sites at high risk of failure. ..."
 }
 ```
 
@@ -367,7 +373,7 @@ pytest tests/ -v
 | 2. Degrading site detection | 8 degrading sites | Final health score below 60 at every site; anomalies detected at every site; a prediction with risk above 0.3 at every site |
 | 3. Sudden failure detection | 4 sudden-failure sites | Every failure caught; risk above 0.7 at every site; estimated failure window under 4 hours |
 
-`tests/test_pipeline.py` holds 13 unit and integration tests: dataset shape, scenarios and non-negative values; health scoring of healthy and critical rows; weights summing to 1.0; an injected 500 ms latency spike being flagged; prediction risk on failing versus healthy series; and Pydantic validation of valid and invalid data.
+`tests/test_pipeline.py` holds 14 unit and integration tests: dataset shape, scenarios and non-negative values; health scoring of healthy and critical rows; weights summing to 1.0; an injected 500 ms latency spike being flagged; prediction risk on failing versus healthy series; a site with only handover failures being classed `mobility_degradation`; and Pydantic validation of valid and invalid data.
 
 ## Project Structure
 
@@ -388,10 +394,10 @@ pytest tests/ -v
 │   └── site_scenarios.json
 ├── tests
 │   └── test_pipeline.py
-├── apikey
 ├── dashboard.py
 ├── evaluate.py
 ├── generate_data.py
+├── README.md
 └── requirements.txt
 
 4 directories, 17 files
@@ -405,7 +411,7 @@ All thresholds live in `app/config.py` (with a comment on each) so there is one 
 
 ### Health scoring
 
-Each of seven KPIs is mapped to a 0-100 sub-score with a piecewise linear curve through three anchors, then combined with fixed weights into an integer score.
+Each of eight KPIs is mapped to a 0-100 sub-score with a piecewise linear curve through three anchors, then combined with fixed weights into an integer score.
 
 | Sub-score | Value |
 |---|---|
@@ -418,15 +424,18 @@ The curve is continuous, so small KPI changes never cause large score jumps.
 
 | KPI | Weight | Good | Warning | Critical | Why |
 |---|---|---|---|---|---|
-| Latency | 0.20 | 5G 15 ms / LTE 40 ms | 5G 30 / LTE 60 | 5G 50 / LTE 100 | Maps to the 3GPP 5QI packet delay budget; strongest driver of user experience. 5G SLA is typically under 10 ms, so 30 ms is an early signal. LTE normally runs 30-50 ms. |
-| Packet loss | 0.20 | 1.0% | 2.0% | 5.0% | Maps to the 5QI packet error rate; breaks voice, video, and TCP quickly. Carrier targets are usually under 1%. |
-| CPU | 0.15 | 60% | 75% | 90% | Best leading indicator of overload. 75% leaves 15 points of headroom; above 90% bursts cause failures. |
-| Throughput | 0.15 | 5G 900 / LTE 150 Mbps | 70% of baseline (630 / 105) | 50% of baseline (450 / 75) | Delivered capacity. Baselines sit at the lower quartile of each healthy range so low-end healthy sites are not penalized. |
-| Memory | 0.10 | 60% | 75% | 90% | Changes slowly; failures also show up in CPU and latency. |
-| SINR | 0.10 | 10 dB | 5 dB | 0 dB | Already reflected in throughput and loss. At 0 dB, noise equals signal. |
-| Alarms | 0.10 | 0 | 2 | 5 | Corroborates KPI problems rather than leading them. |
+| Latency | 0.18 | 5G 15 ms / LTE 40 ms | 5G 30 / LTE 60 | 5G 50 / LTE 100 | Maps to the 3GPP 5QI packet delay budget; strongest driver of user experience. 5G SLA is typically under 10 ms, so 30 ms is an early signal. LTE normally runs 30-50 ms. |
+| Packet loss | 0.18 | 1.0% | 2.0% | 5.0% | Maps to the 5QI packet error rate; breaks voice, video, and TCP quickly. Carrier targets are usually under 1%. |
+| CPU | 0.135 | 60% | 75% | 90% | Best leading indicator of overload. 75% leaves 15 points of headroom; above 90% bursts cause failures. |
+| Throughput | 0.135 | 5G 900 / LTE 150 Mbps | 70% of baseline (630 / 105) | 50% of baseline (450 / 75) | Delivered capacity. Baselines sit at the lower quartile of each healthy range so low-end healthy sites are not penalized. |
+| Handover failure rate | 0.10 | 4% | 8% | 15% | Direct measure of mobility quality. Above 8% indicates mobility issues; above 15% causes dropped calls. |
+| Memory | 0.09 | 60% | 75% | 90% | Changes slowly; failures also show up in CPU and latency. |
+| SINR | 0.09 | 10 dB | 5 dB | 0 dB | Already reflected in throughput and loss. At 0 dB, noise equals signal. |
+| Alarms | 0.09 | 0 | 2 | 5 | Corroborates KPI problems rather than leading them. |
 
-Per-network-type adjustment: latency and throughput use separate 5G and LTE anchors (above). The other KPIs share thresholds across technologies.
+The original seven weights were each scaled by 0.9 when handover failure rate was added, so the total stays 1.0.
+
+Per-network-type adjustment: latency and throughput use separate 5G and LTE anchors (above). The other KPIs, including handover failure rate, share thresholds across technologies.
 
 The integer score maps to a status:
 
@@ -440,7 +449,7 @@ The integer score maps to a status:
 ### Anomaly detection
 
 - **Statistical (z-score).** For each site and KPI, each value is compared with the mean and standard deviation of the **previous 12 readings** (a 3-hour rolling window, which excludes the current value). Absolute z above **2.5** is a `warning`, above **3.5** a `critical`. Both directions are flagged. The standard deviation is floored at 5% of the mean plus a small per-KPI absolute minimum, so a flat window cannot turn a tiny move into an enormous z-score. The expected range reported is mean ± 2.5 standard deviations.
-- **Isolation Forest.** One model is fitted on all eight KPIs (`n_estimators=100`, `max_samples="auto"`, `contamination=0.1`, `random_state=42`). `contamination=0.1` makes it flag the 10% most unusual rows, matching the share of planted faults. `anomaly_score` is the negated `score_samples` value, so higher is more anomalous.
+- **Isolation Forest.** One model is fitted on all nine KPIs (`n_estimators=100`, `max_samples="auto"`, `contamination=0.1`, `random_state=42`). `contamination=0.1` makes it flag the 10% most unusual rows, matching the share of planted faults. `anomaly_score` is the negated `score_samples` value, so higher is more anomalous.
 - **Combined use.** The z-score output feeds explanations and the anomaly-density risk signal. The Isolation Forest output is attached to each row for dashboards and downstream boosting.
 
 ### Risk scoring
@@ -451,7 +460,7 @@ The risk score is a weighted sum of five signals, each normalized to 0-1:
 |---|---|---|
 | Health score trend (last 4 h slope) | 0.30 | 0 at no decline, 0.5 at 2 points/hour, 1.0 at 5 points/hour or more |
 | Current health score | 0.20 | 1.0 at 40 or below, 0.5 at 60, 0 at 80 or above |
-| KPI threshold proximity | 0.20 | Count of KPIs within 15% of critical (or beyond), saturating at 3 |
+| KPI threshold proximity | 0.20 | Count of the eight threshold KPIs within 15% of critical (or beyond), saturating at 3 |
 | Anomaly density (last 2 h) | 0.15 | Statistical anomaly count, saturating at 10 |
 | Trend acceleration | 0.15 | 2-hour decline minus 4-hour decline, saturating at 5 points/hour |
 
@@ -459,7 +468,7 @@ Weight rationale: the trend is the most direct evidence of movement toward failu
 
 Sites above **0.3** risk are reported. Risk levels in the summary are high (0.7 or above), medium (0.5 or above), and low.
 
-**Failure type** comes from per-KPI stress (1 minus the sub-score divided by 100) weighted by how specifically each KPI points to a failure mode: congestion (user surge 1.0, latency and loss 0.5), capacity exhaustion (CPU and memory 0.8), signal degradation (SINR 1.0, throughput 0.5), hardware degradation (alarms and loss 0.5). The type with the highest weighted stress wins. This is a heuristic: when many KPIs collapse at once, the root cause is genuinely ambiguous.
+**Failure type** comes from per-KPI stress (1 minus the sub-score divided by 100) weighted by how specifically each KPI points to a failure mode: congestion (user surge 1.0, latency and loss 0.5), capacity exhaustion (CPU and memory 0.8), signal degradation (SINR 1.0, throughput 0.5), hardware degradation (alarms and loss 0.5). The type with the highest weighted stress wins. A fifth type, `mobility_degradation`, is assigned only when handover failure rate is the most stressed KPI by a margin of at least 0.05, because handover failures rise in almost every fault and would otherwise label everything as mobility. This is a heuristic: when many KPIs collapse at once, the root cause is genuinely ambiguous.
 
 ### Failure window estimation
 
@@ -512,4 +521,5 @@ The weights are expert-set, not learned, so confidence is an ordinal guide rathe
 - Could add LSTM-based prediction with sufficient training data
 - Evaluation uses data from the project's own generator, so it shows internal consistency with the designed scenarios, not performance on real telemetry
 - Failure type is a heuristic and is ambiguous when many KPIs collapse together
+- `mobility_degradation` needs handover failures to be the clearly dominant stress; it does not trigger on the synthetic scenarios, where faults saturate several KPIs at once (it is covered by a unit test instead)
 - Sudden failures cannot be predicted ahead of time by any trend-based method; they are recognized once the crash begins

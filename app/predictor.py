@@ -40,6 +40,8 @@ highest-scoring type names the failure:
 * capacity_exhaustion   CPU and memory (0.8)
 * signal_degradation    SINR (1.0), throughput (0.5)
 * hardware_degradation  alarms and packet loss (0.5)
+* mobility_degradation  handover failure rate, only when it is the single
+                        most stressed KPI by a clear margin
 
 Specificity weights keep symptoms from drowning out causes. Alarms and
 latency rise in almost every fault, so on their own they say little about the
@@ -92,6 +94,8 @@ from app.config import (
     ALARM_COUNT_WARNING,
     CPU_CRITICAL,
     CPU_WARNING,
+    HANDOVER_FAILURE_RATE_CRITICAL,
+    HANDOVER_FAILURE_RATE_WARNING,
     HEALTH_SCORE_DEGRADED,
     HEALTH_SCORE_HEALTHY,
     HEALTH_SCORE_WARNING,
@@ -224,10 +228,11 @@ KPI_COMPONENT = dict(
             "packet_loss_pct",
             "throughput_mbps",
             "signal_quality_sinr",
+            "handover_failure_rate",
             "alarm_count",
         ],
         ["cpu_score", "memory_score", "latency_score", "packet_loss_score",
-         "throughput_score", "sinr_score", "alarm_score"],
+         "throughput_score", "sinr_score", "handover_score", "alarm_score"],
     )
 )
 USER_KPI = "connected_users"
@@ -242,6 +247,12 @@ FAILURE_TYPE_SPECIFICITY = {
     "signal_degradation": {"signal_quality_sinr": 1.0, "throughput_mbps": 0.5},
     "hardware_degradation": {"alarm_count": 0.5, "packet_loss_pct": 0.5},
 }
+MOBILITY_TYPE = "mobility_degradation"
+HANDOVER_KPI = "handover_failure_rate"
+# Handover failures rise in almost every fault, so they name the failure only
+# when their stress beats every other KPI by this margin. Saturated KPIs all
+# sit at 1.0, so a site where everything has collapsed is not called mobility.
+MOBILITY_DOMINANCE_MARGIN = 0.05
 RECOMMENDED_ACTIONS = {
     "congestion": "Rebalance traffic to neighboring cells and review capacity for this site.",
     "capacity_exhaustion": "Check CPU and memory consumers, restart runaway processes, "
@@ -250,6 +261,8 @@ RECOMMENDED_ACTIONS = {
                           "schedule a radio optimization.",
     "hardware_degradation": "Dispatch a field engineer to inspect hardware and review "
                             "active alarms.",
+    "mobility_degradation": "Review neighbor cell lists and handover parameters, and check "
+                            "coverage overlap with adjacent sites.",
 }
 URGENT_ACTION_PREFIX = "URGENT: "
 
@@ -320,6 +333,7 @@ def _critical_thresholds(network_type: str) -> dict[str, tuple[float, float]]:
         "packet_loss_pct": (PACKET_LOSS_WARNING, PACKET_LOSS_CRITICAL),
         "throughput_mbps": throughput,
         "signal_quality_sinr": (SINR_WARNING, SINR_CRITICAL),
+        "handover_failure_rate": (HANDOVER_FAILURE_RATE_WARNING, HANDOVER_FAILURE_RATE_CRITICAL),
         "alarm_count": (ALARM_COUNT_WARNING, ALARM_COUNT_CRITICAL),
     }
 
@@ -471,6 +485,9 @@ def predict_failure(
     stress[USER_KPI] = float(np.clip(surge / USER_SURGE_SATURATION, 0.0, 1.0))
     type_scores = _failure_type_scores(stress)
     failure_type = max(type_scores, key=type_scores.get)
+    other_stress = max(value for kpi, value in stress.items() if kpi != HANDOVER_KPI)
+    if stress[HANDOVER_KPI] >= other_stress + MOBILITY_DOMINANCE_MARGIN:
+        failure_type = MOBILITY_TYPE
 
     # Failure window by linear extrapolation of the faster recent decline
     decline = max(decline_long, decline_short)

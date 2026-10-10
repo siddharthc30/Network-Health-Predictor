@@ -78,6 +78,7 @@ TREND_COLUMNS = [
     "packet_loss_pct",
     "throughput_mbps",
     "signal_quality_sinr",
+    "handover_failure_rate",
     "alarm_count",
 ]
 

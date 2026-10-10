@@ -49,7 +49,7 @@ TEST_END_TIME = pd.Timestamp("2025-01-02 00:00:00")
 EXPECTED_ROWS = SITE_COUNT * HOURS_OF_DATA * POINTS_PER_HOUR
 NON_NEGATIVE_COLUMNS = [
     "cpu_utilization", "memory_utilization", "latency_ms", "packet_loss_pct",
-    "throughput_mbps", "connected_users", "alarm_count",
+    "throughput_mbps", "connected_users", "handover_failure_rate", "alarm_count",
 ]
 HEALTHY_SCORE_FLOOR = 80
 CRITICAL_SCORE_CEILING = 40
@@ -95,7 +95,8 @@ def good_row() -> pd.Series:
         "site_id": SITE_ID, "timestamp": TEST_END_TIME, "network_type": "5G",
         "cpu_utilization": 40.0, "memory_utilization": 45.0, "latency_ms": 8.0,
         "packet_loss_pct": 0.1, "throughput_mbps": 1000.0, "connected_users": 120,
-        "signal_quality_sinr": 20.0, "alarm_count": 0, "site_status": "Healthy",
+        "signal_quality_sinr": 20.0, "handover_failure_rate": 2.0,
+        "alarm_count": 0, "site_status": "Healthy",
     })
 
 
@@ -106,7 +107,7 @@ def bad_row(good_row) -> pd.Series:
     row.update({
         "cpu_utilization": 99.0, "memory_utilization": 98.0, "latency_ms": 300.0,
         "packet_loss_pct": 15.0, "throughput_mbps": 20.0, "signal_quality_sinr": -10.0,
-        "alarm_count": 10, "site_status": "Failed",
+        "handover_failure_rate": 25.0, "alarm_count": 10, "site_status": "Failed",
     })
     return row
 
@@ -208,6 +209,22 @@ def test_prediction_healthy_site(make_site, network_type):
     assert prediction is None or prediction.risk_score < RISK_REPORT_THRESHOLD
 
 
+def test_prediction_mobility_degradation(make_site):
+    """When handover failures are the single most stressed KPI, the type is mobility."""
+    site = make_site("HEALTHY")
+    ramp_rows = 16
+    start = len(site) - ramp_rows
+    site.loc[site.index[start:], "handover_failure_rate"] = np.linspace(4.0, 20.0, ramp_rows)
+    site = score_all_sites(site.drop(columns=[c for c in site.columns if c.endswith("_score")
+                                              or c == "health_status"]))
+    anomalies = detect_statistical_anomalies(site, SITE_ID)
+    prediction = predict_failure(SITE_ID, site, anomalies, site["health_score"])
+
+    assert prediction is not None
+    assert prediction.predicted_failure_type == "mobility_degradation"
+    assert any(k["kpi_name"] == "handover_failure_rate" for k in prediction.supporting_kpis)
+
+
 # --- Models ----------------------------------------------------------------
 
 def test_models_validation():
@@ -216,19 +233,23 @@ def test_models_validation():
         "site_id": SITE_ID, "timestamp": TEST_END_TIME, "network_type": "5G",
         "cpu_utilization": 40.0, "memory_utilization": 45.0, "latency_ms": 8.0,
         "packet_loss_pct": 0.1, "throughput_mbps": 1000.0, "connected_users": 120,
-        "signal_quality_sinr": 20.0, "alarm_count": 0, "site_status": "Healthy",
+        "signal_quality_sinr": 20.0, "handover_failure_rate": 2.0,
+        "alarm_count": 0, "site_status": "Healthy",
     }
     assert SiteMetric(**metric).network_type == "5G"
     for field, bad_value in [
         ("network_type", "6G"), ("cpu_utilization", 150.0), ("latency_ms", -1.0),
         ("site_status", "Unknown"), ("connected_users", -5),
+        ("handover_failure_rate", 120.0), ("handover_failure_rate", -1.0),
     ]:
         with pytest.raises(ValidationError):
             SiteMetric(**{**metric, field: bad_value})
 
     health = {"site_id": SITE_ID, "timestamp": TEST_END_TIME, "score": 85,
-              "status": "Healthy", "component_scores": {"cpu_score": 90.0}}
+              "status": "Healthy", "component_scores": {"cpu_score": 90.0, "handover_score": 95.0}}
     assert HealthScore(**health).score == 85
+    with pytest.raises(ValidationError):
+        HealthScore(**{**health, "component_scores": {"unknown_score": 1.0}})
     with pytest.raises(ValidationError):
         HealthScore(**{**health, "score": 120})
     with pytest.raises(ValidationError):

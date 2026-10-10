@@ -25,9 +25,15 @@ NON_NEGATIVE_COLUMNS = [
     "packet_loss_pct",
     "throughput_mbps",
     "connected_users",
+    "handover_failure_rate",
     "alarm_count",
 ]
-PERCENT_COLUMNS = ["cpu_utilization", "memory_utilization", "packet_loss_pct"]
+PERCENT_COLUMNS = [
+    "cpu_utilization",
+    "memory_utilization",
+    "packet_loss_pct",
+    "handover_failure_rate",
+]
 SAMPLE_ROWS = 5
 EXPECTED_ROWS = SITE_COUNT * HOURS_OF_DATA * POINTS_PER_HOUR
 SEPARATOR = "-" * 60

@@ -14,8 +14,8 @@ Because all KPIs share one stress profile, they degrade together, which gives
 the correlations seen in real networks:
 
 * CPU up        -> latency up, throughput down
-* users up      -> CPU up, packet loss up, latency up
-* SINR down     -> throughput down, packet loss up
+* users up      -> CPU up, packet loss up, latency up, handover failures up
+* SINR down     -> throughput down, packet loss up, handover failures up
 
 Alarm counts and site status are not scripted. They are derived at every
 timestamp from the generated KPI values and the thresholds in app.config, so
@@ -55,6 +55,8 @@ from app.config import (
     ALARM_COUNT_WARNING,
     CPU_CRITICAL,
     CPU_WARNING,
+    HANDOVER_FAILURE_RATE_CRITICAL,
+    HANDOVER_FAILURE_RATE_WARNING,
     HEALTH_SCORE_DEGRADED,
     HEALTH_SCORE_WARNING,
     HOURS_OF_DATA,
@@ -137,6 +139,18 @@ BASELINE_MARGIN_FRACTION = 0.1
 # Noise sigma per site is 2-5% of each KPI's baseline value
 NOISE_SIGMA_FRACTION_RANGE = (0.02, 0.05)
 
+# Handover failure rate (%) baselines. 5G cells are smaller, so devices hand
+# over more often and fail slightly more often than on LTE.
+HANDOVER_BASELINE_RANGES = {"5G": (1.0, 4.0), "LTE": (0.5, 3.0)}
+# Handover has its own random stream, so adding this KPI leaves every other
+# KPI's generated values unchanged
+# Percentage points of handover failure per 100% change in user count; more
+# users mean more handover attempts competing for target-cell resources
+HANDOVER_USER_COUPLING = 3.0
+# Percentage points of handover failure per dB of lost SINR; weak signal at the
+# cell edge is the classic cause of failed handovers
+HANDOVER_SINR_COUPLING = 0.25
+
 # --- Data quality limits ----------------------------------------------------
 
 PERCENT_MIN = 0.0
@@ -180,6 +194,7 @@ SCENARIO_END_STATES = {
         "throughput_ratio": (0.55, 0.65),
         "sinr_drop": (7.0, 9.0),
         "users_mult": (1.1, 1.3),
+        "handover": (11.0, 13.0),
     },
     "CONGESTION": {
         "cpu": (80.0, 95.0),
@@ -189,6 +204,7 @@ SCENARIO_END_STATES = {
         "throughput_ratio": (0.5, 0.7),
         "sinr_drop": (1.0, 3.0),
         "users_mult": (1.6, 2.0),
+        "handover": (10.0, 18.0),
     },
     "FAILING": {
         "cpu": (96.0, 99.0),
@@ -199,6 +215,7 @@ SCENARIO_END_STATES = {
         "throughput_ratio": (0.05, 0.18),
         "sinr_drop": (10.0, 14.0),
         "users_mult": (0.9, 1.2),
+        "handover": (17.0, 24.0),
     },
     "INTERMITTENT": {
         "cpu": (80.0, 88.0),
@@ -209,6 +226,8 @@ SCENARIO_END_STATES = {
         "throughput_ratio": (0.55, 0.65),
         "sinr_drop": (6.0, 8.0),
         "users_mult": (1.1, 1.3),
+        # Value reached at the spike peak; scaled up to a full-stress end state
+        "handover": (12.0, 16.0),
     },
     "SUDDEN_FAILURE": {
         "cpu": (96.0, 99.0),
@@ -219,6 +238,7 @@ SCENARIO_END_STATES = {
         "throughput_ratio": (0.02, 0.12),
         "sinr_drop": (12.0, 16.0),
         "users_mult": (0.6, 1.0),
+        "handover": (18.0, 22.0),
     },
 }
 
@@ -305,6 +325,23 @@ def _draw_end_state(
     }
 
 
+def _draw_handover_levels(
+    scenario: str, network_type: str, rng: np.random.Generator
+) -> tuple[float, float]:
+    """Draw the healthy baseline and full-stress end value for handover failures."""
+    low, high = HANDOVER_BASELINE_RANGES[network_type]
+    margin = (high - low) * BASELINE_MARGIN_FRACTION
+    baseline = float(rng.uniform(low + margin, high - margin))
+    if scenario == "HEALTHY":
+        return baseline, baseline
+
+    target = float(rng.uniform(*SCENARIO_END_STATES[scenario]["handover"]))
+    if scenario == "INTERMITTENT":
+        # The target is the value at the spike peak, which reaches only part of full stress
+        target = baseline + (target - baseline) / INTERMITTENT_PEAK_STRESS
+    return baseline, target
+
+
 def _build_stress_profile(
     scenario: str, n_points: int, rng: np.random.Generator
 ) -> np.ndarray:
@@ -363,6 +400,11 @@ def _classify_row(
         _upper_severity(values["packet_loss_pct"], PACKET_LOSS_WARNING, PACKET_LOSS_CRITICAL),
         _lower_severity(throughput_ratio, THROUGHPUT_DROP_WARNING, THROUGHPUT_DROP_CRITICAL),
         _lower_severity(values["signal_quality_sinr"], SINR_WARNING, SINR_CRITICAL),
+        _upper_severity(
+            values["handover_failure_rate"],
+            HANDOVER_FAILURE_RATE_WARNING,
+            HANDOVER_FAILURE_RATE_CRITICAL,
+        ),
     ]
     n_critical = sum(1 for s in severities if s >= 1.0)
     n_warning = sum(1 for s in severities if 0.0 < s < 1.0)
@@ -439,10 +481,22 @@ def generate_site_telemetry(
     noise_fraction = rng.uniform(*NOISE_SIGMA_FRACTION_RANGE)
 
     series = {}
+    noises = {}
     for kpi, baseline in baselines.items():
         clean = baseline + stress * (end_state[kpi] - baseline)
         noise = rng.normal(0.0, noise_fraction * abs(baseline), n_points)
         series[kpi] = clean + noise
+        noises[kpi] = noise
+
+    # Handover failures follow the scenario stress, and pick up the same random
+    # movement as user count and SINR so they stay correlated reading to reading
+    handover_rng = np.random.default_rng(rng.bit_generator.seed_seq.spawn(1)[0])
+    handover_base, handover_end = _draw_handover_levels(scenario, network_type, handover_rng)
+    handover = handover_base + stress * (handover_end - handover_base)
+    handover += handover_rng.normal(0.0, noise_fraction * handover_base, n_points)
+    handover += HANDOVER_USER_COUPLING * noises["connected_users"] / baselines["connected_users"]
+    handover -= HANDOVER_SINR_COUPLING * noises["signal_quality_sinr"]
+    series["handover_failure_rate"] = np.clip(handover, PERCENT_MIN, PERCENT_MAX)
 
     series["cpu_utilization"] = np.clip(series["cpu_utilization"], PERCENT_MIN, PERCENT_MAX)
     series["memory_utilization"] = np.clip(series["memory_utilization"], PERCENT_MIN, PERCENT_MAX)

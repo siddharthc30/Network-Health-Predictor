@@ -87,6 +87,13 @@ ALARM_COUNT_CRITICAL = 5
 # Two alarms are common in isolation but suggest a fault when persistent
 ALARM_COUNT_WARNING = 2
 
+# --- Handover failure rate (percent of failed handovers between cells) ----
+
+# Above 15% handover failures causes dropped calls and session resets
+HANDOVER_FAILURE_RATE_CRITICAL = 15.0
+# Above 8% indicates mobility issues, roughly twice a healthy 5G cell's worst case
+HANDOVER_FAILURE_RATE_WARNING = 8.0
+
 # --- "Good" reference points (KPI sub-score is 100 at or better) ---------
 
 # Healthy sites run at 30-60% CPU, so 60% is the top of normal operation
@@ -103,6 +110,8 @@ PACKET_LOSS_GOOD = 1.0
 SINR_GOOD = 10
 # A healthy site raises no alarms
 ALARM_COUNT_GOOD = 0
+# Top of the normal handover failure range (0.5-4%) across both technologies
+HANDOVER_FAILURE_RATE_GOOD = 4.0
 
 # Expected healthy throughput per technology (Mbps). Set at the lower quartile
 # of the normal range (5G 800-1200, LTE 100-300) so a healthy site that is

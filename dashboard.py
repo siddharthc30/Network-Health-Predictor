@@ -56,6 +56,7 @@ COMPONENT_LABELS = {
     "packet_loss_score": "Packet loss",
     "throughput_score": "Throughput",
     "sinr_score": "SINR",
+    "handover_score": "Handover",
     "alarm_score": "Alarms",
 }
 DEEP_DIVE_KPIS = [
@@ -63,7 +64,11 @@ DEEP_DIVE_KPIS = [
     ("packet_loss_pct", "Packet loss (%)"),
     ("cpu_utilization", "CPU utilization (%)"),
     ("throughput_mbps", "Throughput (Mbps)"),
+    ("handover_failure_rate", "Handover failure rate (%)"),
 ]
+CHART_COLUMNS = 2
+# Height per chart row in the deep dive grid
+CHART_ROW_HEIGHT = 300
 EXAMPLE_QUESTIONS = [
     "What are the biggest risks right now?",
     "Which sites should engineers prioritize?",
@@ -435,14 +440,15 @@ def build_deep_dive_figure(history: dict, anomalies: list[dict]) -> go.Figure:
     if not anomaly_frame.empty:
         anomaly_frame["timestamp"] = pd.to_datetime(anomaly_frame["timestamp"])
 
+    n_rows = -(-len(DEEP_DIVE_KPIS) // CHART_COLUMNS)
     figure = make_subplots(
-        rows=2, cols=2, subplot_titles=[label for _, label in DEEP_DIVE_KPIS],
-        specs=[[{"secondary_y": True}, {"secondary_y": True}],
-               [{"secondary_y": True}, {"secondary_y": True}]],
-        horizontal_spacing=0.1, vertical_spacing=0.15,
+        rows=n_rows, cols=CHART_COLUMNS,
+        subplot_titles=[label for _, label in DEEP_DIVE_KPIS],
+        specs=[[{"secondary_y": True}] * CHART_COLUMNS for _ in range(n_rows)],
+        horizontal_spacing=0.1, vertical_spacing=0.1,
     )
     for index, (kpi, label) in enumerate(DEEP_DIVE_KPIS):
-        row, col = divmod(index, 2)
+        row, col = divmod(index, CHART_COLUMNS)
         row, col = row + 1, col + 1
         first = index == 0
         figure.add_trace(
@@ -471,7 +477,7 @@ def build_deep_dive_figure(history: dict, anomalies: list[dict]) -> go.Figure:
         figure.update_yaxes(title_text=label, row=row, col=col, secondary_y=False)
         figure.update_yaxes(range=[0, 100], title_text="Health", row=row, col=col,
                             secondary_y=True, showgrid=False)
-    figure.update_layout(height=620, margin=dict(t=60, b=20),
+    figure.update_layout(height=CHART_ROW_HEIGHT * n_rows, margin=dict(t=60, b=20),
                          legend=dict(orientation="h", y=1.1))
     return figure
 

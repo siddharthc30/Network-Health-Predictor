@@ -10,6 +10,29 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
+MetricName = Literal[
+    "cpu_utilization",
+    "memory_utilization",
+    "latency_ms",
+    "packet_loss_pct",
+    "throughput_mbps",
+    "connected_users",
+    "signal_quality_sinr",
+    "handover_failure_rate",
+    "alarm_count",
+]
+ComponentName = Literal[
+    "cpu_score",
+    "memory_score",
+    "latency_score",
+    "packet_loss_score",
+    "throughput_score",
+    "sinr_score",
+    "handover_score",
+    "alarm_score",
+]
+
+
 class SiteMetric(BaseModel):
     """A single KPI snapshot for one cell site at one point in time."""
 
@@ -23,6 +46,7 @@ class SiteMetric(BaseModel):
     throughput_mbps: float = Field(ge=0)
     connected_users: int = Field(ge=0)
     signal_quality_sinr: float
+    handover_failure_rate: float = Field(ge=0, le=100)
     alarm_count: int = Field(ge=0)
     site_status: Literal["Healthy", "Degraded", "Critical", "Failed"]
 
@@ -34,7 +58,7 @@ class HealthScore(BaseModel):
     timestamp: datetime
     score: float = Field(ge=0, le=100)
     status: Literal["Healthy", "Warning", "Degraded", "Critical"]
-    component_scores: dict[str, float]
+    component_scores: dict[ComponentName, float]
 
 
 class Anomaly(BaseModel):
@@ -42,7 +66,7 @@ class Anomaly(BaseModel):
 
     site_id: str
     timestamp: datetime
-    metric_name: str
+    metric_name: MetricName
     current_value: float
     expected_range_low: float
     expected_range_high: float

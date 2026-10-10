@@ -4,7 +4,7 @@ Methodology
 -----------
 Every telemetry row is reduced to one health score from 0 to 100 in two steps.
 
-1. Sub-scores. Each of seven KPIs is mapped to a 0-100 sub-score with a
+1. Sub-scores. Each of eight KPIs is mapped to a 0-100 sub-score with a
    piecewise linear curve through three anchor points taken from config:
 
        at or better than "good"   -> 100
@@ -27,13 +27,16 @@ Every telemetry row is reduced to one health score from 0 to 100 in two steps.
 
 Weights
 -------
-Latency and packet loss carry the most weight (0.20 each) because they map
+Latency and packet loss carry the most weight (0.18 each) because they map
 directly to the packet delay budget and packet error rate in 3GPP 5QI QoS
 profiles, so they are the closest proxy for user experience. CPU and
-throughput follow at 0.15: CPU is the best leading indicator of overload and
-throughput measures delivered capacity. Memory, SINR, and alarms carry 0.10
-each: memory changes slowly, SINR is already reflected in throughput and
-loss, and alarms corroborate the KPIs rather than lead them.
+throughput follow at 0.135: CPU is the best leading indicator of overload and
+throughput measures delivered capacity. Handover failure rate carries 0.10:
+it is the direct measure of mobility quality and causes dropped calls.
+Memory, SINR, and alarms carry 0.09 each: memory changes slowly, SINR is
+already reflected in throughput and loss, and alarms corroborate the KPIs
+rather than lead them. When handover failure rate was added, the original
+seven weights were each scaled by 0.9 so the total stays 1.0.
 
 Thresholds
 ----------
@@ -53,6 +56,9 @@ from app.config import (
     CPU_CRITICAL,
     CPU_GOOD,
     CPU_WARNING,
+    HANDOVER_FAILURE_RATE_CRITICAL,
+    HANDOVER_FAILURE_RATE_GOOD,
+    HANDOVER_FAILURE_RATE_WARNING,
     HEALTH_SCORE_CRITICAL,
     HEALTH_SCORE_DEGRADED,
     HEALTH_SCORE_HEALTHY,
@@ -89,22 +95,25 @@ from app.models import HealthScore
 # --- KPI weights (must sum to 1.0) -----------------------------------------
 
 KPI_WEIGHTS = {
-    # Latency weighted 0.20: maps to the 3GPP 5QI packet delay budget, the
+    # Latency weighted 0.18: maps to the 3GPP 5QI packet delay budget, the
     # strongest single driver of perceived user experience
-    "latency_score": 0.20,
-    # Packet loss weighted 0.20: maps to the 5QI packet error rate and breaks
+    "latency_score": 0.18,
+    # Packet loss weighted 0.18: maps to the 5QI packet error rate and breaks
     # voice, video, and TCP throughput quickly
-    "packet_loss_score": 0.20,
-    # CPU weighted 0.15: best leading indicator of overload before users notice
-    "cpu_score": 0.15,
-    # Throughput weighted 0.15: measures the capacity actually delivered
-    "throughput_score": 0.15,
-    # Memory weighted 0.10: changes slowly, and failures show up in CPU and latency
-    "memory_score": 0.10,
-    # SINR weighted 0.10: radio quality is already reflected in throughput and loss
-    "sinr_score": 0.10,
-    # Alarms weighted 0.10: corroborate KPI problems rather than lead them
-    "alarm_score": 0.10,
+    "packet_loss_score": 0.18,
+    # CPU weighted 0.135: best leading indicator of overload before users notice
+    "cpu_score": 0.135,
+    # Throughput weighted 0.135: measures the capacity actually delivered
+    "throughput_score": 0.135,
+    # Handover failures weighted 0.10: direct measure of mobility quality and a
+    # cause of dropped calls, but only affects users who are moving
+    "handover_score": 0.10,
+    # Memory weighted 0.09: changes slowly, and failures show up in CPU and latency
+    "memory_score": 0.09,
+    # SINR weighted 0.09: radio quality is already reflected in throughput and loss
+    "sinr_score": 0.09,
+    # Alarms weighted 0.09: corroborate KPI problems rather than lead them
+    "alarm_score": 0.09,
 }
 WEIGHT_SUM_TOLERANCE = 1e-9
 
@@ -126,6 +135,11 @@ MEMORY_ANCHORS = (MEMORY_GOOD, MEMORY_WARNING, MEMORY_CRITICAL)
 PACKET_LOSS_ANCHORS = (PACKET_LOSS_GOOD, PACKET_LOSS_WARNING, PACKET_LOSS_CRITICAL)
 SINR_ANCHORS = (SINR_GOOD, SINR_WARNING, SINR_CRITICAL)
 ALARM_ANCHORS = (ALARM_COUNT_GOOD, ALARM_COUNT_WARNING, ALARM_COUNT_CRITICAL)
+HANDOVER_ANCHORS = (
+    HANDOVER_FAILURE_RATE_GOOD,
+    HANDOVER_FAILURE_RATE_WARNING,
+    HANDOVER_FAILURE_RATE_CRITICAL,
+)
 
 SCORE_COLUMN = "health_score"
 STATUS_COLUMN = "health_status"
@@ -154,9 +168,9 @@ def _subscore(value, anchors: tuple[float, float, float]):
 
 
 def _component_scores(
-    cpu, memory, latency, packet_loss, throughput, sinr, alarms, network_type: str
+    cpu, memory, latency, packet_loss, throughput, sinr, handover, alarms, network_type: str
 ) -> dict:
-    """Compute all seven sub-scores for scalars or equal-length arrays."""
+    """Compute all eight sub-scores for scalars or equal-length arrays."""
     if network_type not in LATENCY_ANCHORS:
         raise ValueError(f"Unknown network_type: {network_type}")
     return {
@@ -166,6 +180,7 @@ def _component_scores(
         "packet_loss_score": _subscore(packet_loss, PACKET_LOSS_ANCHORS),
         "throughput_score": _subscore(throughput, THROUGHPUT_ANCHORS[network_type]),
         "sinr_score": _subscore(sinr, SINR_ANCHORS),
+        "handover_score": _subscore(handover, HANDOVER_ANCHORS),
         "alarm_score": _subscore(alarms, ALARM_ANCHORS),
     }
 
@@ -196,6 +211,7 @@ def calculate_health_score(row: pd.Series, network_type: str) -> HealthScore:
         row["packet_loss_pct"],
         row["throughput_mbps"],
         row["signal_quality_sinr"],
+        row["handover_failure_rate"],
         row["alarm_count"],
         network_type,
     )
@@ -223,6 +239,7 @@ def score_all_sites(df: pd.DataFrame) -> pd.DataFrame:
             group["packet_loss_pct"].to_numpy(),
             group["throughput_mbps"].to_numpy(),
             group["signal_quality_sinr"].to_numpy(),
+            group["handover_failure_rate"].to_numpy(),
             group["alarm_count"].to_numpy(),
             str(network_type),
         )

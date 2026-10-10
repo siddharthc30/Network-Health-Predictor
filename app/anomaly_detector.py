@@ -14,7 +14,7 @@ Statistical (rolling z-score)
     under every individual threshold.
 
 Isolation Forest (multivariate)
-    An IsolationForest is trained on all eight KPIs at once and isolates
+    An IsolationForest is trained on all nine KPIs at once and isolates
     rows that are unusual as a combination. It catches those joint shifts and
     gives a single anomaly score per row, which is useful to boost failure
     prediction. Its weakness is that it cannot say which KPI is responsible.
@@ -55,6 +55,7 @@ KPI_COLUMNS = [
     "throughput_mbps",
     "connected_users",
     "signal_quality_sinr",
+    "handover_failure_rate",
     "alarm_count",
 ]
 
@@ -80,6 +81,7 @@ STD_FLOOR_ABSOLUTE = {
     "throughput_mbps": 5.0,
     "connected_users": 2.0,
     "signal_quality_sinr": 0.5,
+    "handover_failure_rate": 0.5,
     "alarm_count": 1.0,
 }
 DESCRIPTION_DECIMALS = 2
