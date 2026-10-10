@@ -1,0 +1,32 @@
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Virtual environments
+.venv/
+venv/
+
+# Environment files (secrets); keep the template tracked
+.env
+.env.*
+!.env.example
+
+# Stray key file in the project root
+apikey
+
+# OS files
+.DS_Store
+
+# Editor and IDE files
+*.swp
+.vscode/
+.idea/
+
+# Node
+node_modules/
+
+# Data files (only a small sample is tracked)
+data/*.csv
+
+# Local databases
+*.db
