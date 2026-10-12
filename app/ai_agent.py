@@ -71,16 +71,7 @@ MAX_ANOMALIES_IN_PROMPT = 8
 # Guards the prompt against very long pasted questions
 MAX_QUESTION_CHARS = 1000
 VALUE_DECIMALS = 1
-TREND_COLUMNS = [
-    "cpu_utilization",
-    "memory_utilization",
-    "latency_ms",
-    "packet_loss_pct",
-    "throughput_mbps",
-    "signal_quality_sinr",
-    "handover_failure_rate",
-    "alarm_count",
-]
+TREND_COLUMNS = [c for c in KPI_COLUMNS if c != "connected_users"]
 
 # --- Priority labels -------------------------------------------------------
 

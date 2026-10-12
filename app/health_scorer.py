@@ -141,6 +141,19 @@ HANDOVER_ANCHORS = (
     HANDOVER_FAILURE_RATE_CRITICAL,
 )
 
+# score name -> (raw KPI column, anchors); anchors are per network type for
+# latency and throughput, a plain (good, warning, critical) tuple otherwise
+SUBSCORE_SPEC = {
+    "cpu_score": ("cpu_utilization", CPU_ANCHORS),
+    "memory_score": ("memory_utilization", MEMORY_ANCHORS),
+    "latency_score": ("latency_ms", LATENCY_ANCHORS),
+    "packet_loss_score": ("packet_loss_pct", PACKET_LOSS_ANCHORS),
+    "throughput_score": ("throughput_mbps", THROUGHPUT_ANCHORS),
+    "sinr_score": ("signal_quality_sinr", SINR_ANCHORS),
+    "handover_score": ("handover_failure_rate", HANDOVER_ANCHORS),
+    "alarm_score": ("alarm_count", ALARM_ANCHORS),
+}
+
 SCORE_COLUMN = "health_score"
 STATUS_COLUMN = "health_status"
 COMPONENT_COLUMNS = list(KPI_WEIGHTS)
@@ -167,21 +180,16 @@ def _subscore(value, anchors: tuple[float, float, float]):
     return np.interp(value, points, scores)
 
 
-def _component_scores(
-    cpu, memory, latency, packet_loss, throughput, sinr, handover, alarms, network_type: str
-) -> dict:
-    """Compute all eight sub-scores for scalars or equal-length arrays."""
+def _component_scores(data, network_type: str) -> dict:
+    """Compute all eight sub-scores for a row (Series) or group (DataFrame)."""
     if network_type not in LATENCY_ANCHORS:
         raise ValueError(f"Unknown network_type: {network_type}")
     return {
-        "cpu_score": _subscore(cpu, CPU_ANCHORS),
-        "memory_score": _subscore(memory, MEMORY_ANCHORS),
-        "latency_score": _subscore(latency, LATENCY_ANCHORS[network_type]),
-        "packet_loss_score": _subscore(packet_loss, PACKET_LOSS_ANCHORS),
-        "throughput_score": _subscore(throughput, THROUGHPUT_ANCHORS[network_type]),
-        "sinr_score": _subscore(sinr, SINR_ANCHORS),
-        "handover_score": _subscore(handover, HANDOVER_ANCHORS),
-        "alarm_score": _subscore(alarms, ALARM_ANCHORS),
+        score: _subscore(
+            data[column],
+            anchors[network_type] if isinstance(anchors, dict) else anchors,
+        )
+        for score, (column, anchors) in SUBSCORE_SPEC.items()
     }
 
 
@@ -204,17 +212,7 @@ def _status_for_score(score: float) -> str:
 
 def calculate_health_score(row: pd.Series, network_type: str) -> HealthScore:
     """Score one telemetry row and return the score, status, and sub-scores."""
-    components = _component_scores(
-        row["cpu_utilization"],
-        row["memory_utilization"],
-        row["latency_ms"],
-        row["packet_loss_pct"],
-        row["throughput_mbps"],
-        row["signal_quality_sinr"],
-        row["handover_failure_rate"],
-        row["alarm_count"],
-        network_type,
-    )
+    components = _component_scores(row, network_type)
     score = _weighted_score(components)
     return HealthScore(
         site_id=row["site_id"],
@@ -232,17 +230,7 @@ def score_all_sites(df: pd.DataFrame) -> pd.DataFrame:
         scored[column] = np.nan
 
     for network_type, group in df.groupby("network_type"):
-        components = _component_scores(
-            group["cpu_utilization"].to_numpy(),
-            group["memory_utilization"].to_numpy(),
-            group["latency_ms"].to_numpy(),
-            group["packet_loss_pct"].to_numpy(),
-            group["throughput_mbps"].to_numpy(),
-            group["signal_quality_sinr"].to_numpy(),
-            group["handover_failure_rate"].to_numpy(),
-            group["alarm_count"].to_numpy(),
-            str(network_type),
-        )
+        components = _component_scores(group, str(network_type))
         for column, values in components.items():
             scored.loc[group.index, column] = np.round(values, 1)
         scored.loc[group.index, SCORE_COLUMN] = _weighted_score(components)

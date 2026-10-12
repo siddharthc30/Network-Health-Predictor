@@ -117,7 +117,7 @@ from app.config import (
     THROUGHPUT_WARNING_5G_MBPS,
     THROUGHPUT_WARNING_LTE_MBPS,
 )
-from app.health_scorer import COMPONENT_COLUMNS, score_all_sites
+from app.health_scorer import COMPONENT_COLUMNS, SUBSCORE_SPEC, score_all_sites
 from app.models import Anomaly, Prediction
 
 # --- Risk signal weights (sum to 1.0) --------------------------------------
@@ -219,22 +219,7 @@ URGENT_WINDOW_HOURS = 1.0
 
 # --- KPI and failure type mapping ------------------------------------------
 
-KPI_COMPONENT = dict(
-    zip(
-        [
-            "cpu_utilization",
-            "memory_utilization",
-            "latency_ms",
-            "packet_loss_pct",
-            "throughput_mbps",
-            "signal_quality_sinr",
-            "handover_failure_rate",
-            "alarm_count",
-        ],
-        ["cpu_score", "memory_score", "latency_score", "packet_loss_score",
-         "throughput_score", "sinr_score", "handover_score", "alarm_score"],
-    )
-)
+KPI_COMPONENT = {col: score for score, (col, _) in SUBSCORE_SPEC.items()}
 USER_KPI = "connected_users"
 LOWER_IS_WORSE = {"throughput_mbps", "signal_quality_sinr"}
 

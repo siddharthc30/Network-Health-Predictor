@@ -437,6 +437,8 @@ The original seven weights were each scaled by 0.9 when handover failure rate wa
 
 Per-network-type adjustment: latency and throughput use separate 5G and LTE anchors (above). The other KPIs, including handover failure rate, share thresholds across technologies.
 
+Wiring: `SUBSCORE_SPEC` in `app/health_scorer.py` maps each score name to its raw KPI column and anchors (`handover_score` ← `handover_failure_rate`). The scorer loops over it, and `KPI_COMPONENT` in `app/predictor.py` and `TREND_COLUMNS` in `app/ai_agent.py` are derived from it and `KPI_COLUMNS`, so a new KPI needs its spec entry, weight, config thresholds, and the model `Literal` lists.
+
 The integer score maps to a status:
 
 | Score | Status |
